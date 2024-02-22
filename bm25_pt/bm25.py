@@ -5,6 +5,7 @@ import math
 import torch
 import transformers
 
+
 def documents_to_bags(docs: torch.Tensor, vocab_size: int) -> torch.sparse.Tensor:
     num_docs, seq_length = docs.shape
     batch_idxs = torch.arange(num_docs)[:, None].expand(-1, seq_length)
@@ -14,6 +15,7 @@ def documents_to_bags(docs: torch.Tensor, vocab_size: int) -> torch.sparse.Tenso
     idxs = idxs.reshape((2, -1))
     vals = (docs > 0).int().flatten()
     return torch.sparse_coo_tensor(idxs, vals, size=(num_docs, vocab_size)).coalesce()
+
 
 class TokenizedBM25:
     k1: float
