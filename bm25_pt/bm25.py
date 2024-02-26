@@ -41,12 +41,15 @@ class TokenizedBM25:
     @property
     def _corpus_size(self) -> int:
         return len(self._corpus) if (self._corpus is not None) else -1
-    
+
+    def docs_to_bags(self, documents: torch.Tensor) -> torch.sparse.Tensor:
+        return documents_to_bags(documents, vocab_size=self.vocab_size)
+
     def index(self, documents: torch.Tensor) -> None:
         self._documents = documents
         self._corpus_lengths = (documents != 0).sum(1).float()
         self._average_document_length = self._corpus_lengths.mean()
-        self._corpus = documents_to_bags(documents, vocab_size=self.vocab_size)
+        self._corpus = self.docs_to_bags(documents=documents)
         self._word_counts = self._corpus.sum(dim=0).to_dense()
         self._documents_containing_word = torch.zeros(self.vocab_size, dtype=torch.long)
         token_ids, token_counts = self._corpus.coalesce().indices()[1].unique(return_counts=True)
@@ -135,3 +138,7 @@ class BM25(TokenizedBM25):
     def score_batch(self, queries: List[str]) -> torch.Tensor:
         queries_ids = self.tokenizer_fn(queries)
         return super().score_batch(queries=queries_ids)
+
+    def text_to_bags(self, documents: torch.Tensor) -> torch.sparse.Tensor:
+        document_ids = self.tokenizer_fn(documents)
+        return self.documents_to_bags(document_ids, vocab_size=self.vocab_size)
