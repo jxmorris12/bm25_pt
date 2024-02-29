@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from bm25_pt import BM25
@@ -116,3 +117,27 @@ def test_scores_equal_batch():
     count_of_the =  " ".join(corpus + [""]).count("the ")
     token_of_the = bm25.tokenizer.encode("the", add_special_tokens=False, return_tensors='pt').item()
     assert count_of_the == bm25._corpus.sum(0)[1996]
+
+
+def test_scores_equal_gpu():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA not available")
+    bm25_cpu = BM25(device='cpu') # This is the default
+    bm25_gpu = BM25(device='cuda')
+    corpus = [
+        "Now imagine you’re a software engineer building a RAG system for your company.",
+        "You decide to store your vectors in a vector database. You notice that in a",
+        "vector database, what's stored are embedding vectors, not the text data itself.",
+        "The database fills up with rows and rows of random-seeming numbers",
+        "that represent text data but never ‘sees’ any text data at all.",
+
+    ]
+    bm25_cpu.index(corpus)
+    bm25_gpu.index(corpus)
+
+    queries = ["vectors text database", "see text data", "software rows all at"]
+
+    doc_scores_cpu = bm25_cpu.score_batch(queries)
+    doc_scores_gpu = bm25_gpu.score_batch(queries)
+    
+    torch.testing.assert_close(doc_scores_cpu, doc_scores_gpu.cpu())

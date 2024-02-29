@@ -4,7 +4,7 @@ import functools
 import math
 import torch
 import transformers
-
+import tqdm
 
 def documents_to_bags(docs: torch.Tensor, vocab_size: int) -> torch.sparse.Tensor:
     num_docs, seq_length = docs.shape
@@ -55,7 +55,7 @@ class TokenizedBM25:
         self._index_corpus(corpus)
 
     def _index_corpus(self, corpus: torch.Tensor) -> None:
-        self._corpus = corpus
+        self._corpus = corpus.to(self.device)
         self._corpus_lengths = self._corpus.sum(1).float().to_dense()
         self._average_document_length = self._corpus_lengths.mean()
         self._word_counts = self._corpus.sum(dim=0).to_dense()
@@ -101,7 +101,7 @@ class TokenizedBM25:
         idxs = idxs.reshape((2, -1))
         idf_vals = [[self.compute_IDF(w) for w in q] for q in queries.tolist()]
         idf_vals = torch.tensor(idf_vals, dtype=torch.float).flatten()
-        queries_idf = torch.sparse_coo_tensor(idxs, idf_vals, size=(num_queries, self.vocab_size)).coalesce()
+        queries_idf = torch.sparse_coo_tensor(idxs, idf_vals, size=(num_queries, self.vocab_size)).coalesce().to(self.device)
         occurrences = (queries_idf.float() @ self._corpus.float().T).to_dense()
         scores_n = (occurrences * (self.k1 + 1))
         scores_d = (occurrences + (self.k1 * 
@@ -123,9 +123,9 @@ class BM25(TokenizedBM25):
     b: float
     tokenizer: transformers.PreTrainedTokenizer
 
-    def __init__(self, tokenizer: Optional[transformers.PreTrainedTokenizer] = None, k1: float = 1.5, b: float = 0.75) -> None:
+    def __init__(self, tokenizer: Optional[transformers.PreTrainedTokenizer] = None, k1: float = 1.5, b: float = 0.75, device: str = 'cpu') -> None:
         if tokenizer is None:
-            tokenizer = transformers.AutoTokenizer.from_pretrained('bert-base-uncased')
+            tokenizer = transformers.AutoTokenizer.from_pretrained('bert-base-uncased', use_fast=True)
         # TODO aggregate beyond subword level here...
         self.tokenizer = tokenizer
         tokenizer_fn = functools.partial(
@@ -135,14 +135,16 @@ class BM25(TokenizedBM25):
             add_special_tokens=False,
         )
         self.tokenizer_fn = lambda s: tokenizer_fn(s, return_tensors='pt').input_ids
-        super().__init__(k1=k1, b=b, vocab_size=tokenizer.vocab_size)
+        super().__init__(k1=k1, b=b, vocab_size=tokenizer.vocab_size, device=device)
     
     def index(self, documents: List[str]) -> None:
-        bag_size = 4096
+        bag_size = 512
         bags = []
         i = 0
+        pbar = tqdm.auto.tqdm("tokenizing & bagging", colour="blue", leave=False, total=len(documents))
         while i < len(documents):
             bags.append(self.text_to_bags(documents[i:i+bag_size]))
+            pbar.update(bag_size)
             i += bag_size
         corpus = torch.cat(bags, dim=0)
         self._documents = documents

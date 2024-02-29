@@ -45,4 +45,14 @@ tokenizer = transformers.AutoTokenizer.from_pretrained("t5-base")
 bm25 = BM25(tokenizer=tokenizer)
 ```
 
+### Use a GPU
+
+To perform operations on a GPU, it's easy, just pass a device to initialization:
+
+```python
+from bm25_pt import BM25
+
+bm25 = BM25(device='cuda')
+```
+
 then proceed to use the library as normal.ss    
