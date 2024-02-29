@@ -49,7 +49,7 @@ class TokenizedBM25:
         i = 0
         bags = []
         while i < len(documents):
-            bags.append(documents_to_bag(documents[i:i+batch_size]))
+            bags.append(documents_to_bags(documents[i:i+bag_size]))
             i += bag_size
         corpus = torch.cat(bags, dim=0)
         self._index_corpus(corpus)
@@ -81,7 +81,9 @@ class TokenizedBM25:
             den = occurrences + (self.k1 * 
                                     (1 - self.b + self.b * (this_document_length / self._average_document_length)))
             word_score = self.compute_IDF(word) * num / den
+            print("word:", word, "num:", num, "den:", den, "idf:", self.compute_IDF(word))
             score += word_score
+            print("\t total:", score)
         return score
 
     def score_slow(self, query: torch.Tensor) -> torch.Tensor:
@@ -99,15 +101,23 @@ class TokenizedBM25:
             query_idxs, queries
         ))
         idxs = idxs.reshape((2, -1))
-        idf_vals = [[self.compute_IDF(w) for w in q] for q in queries.tolist()]
+        idf_vals = [[self._IDF[w] for w in q] for q in queries.tolist()]
         idf_vals = torch.tensor(idf_vals, dtype=torch.float).flatten()
         queries_idf = torch.sparse_coo_tensor(idxs, idf_vals, size=(num_queries, self.vocab_size)).coalesce().to(self.device)
-        occurrences = (queries_idf.float() @ self._corpus.float().T).to_dense()
-        scores_n = (occurrences * (self.k1 + 1))
-        scores_d = (occurrences + (self.k1 * 
-                                  (1 - self.b + self.b * (self._corpus_lengths / self._average_document_length))))
+
+        # TODO: Batch efficiently with 3D tensors...
+        # PyTorch sparse doesn't support expand() so this is hard right now.
+        scores = []
+        for i in range(len(queries)):
+            query = queries_idf[i].to_dense().repeat((len(self._corpus), 1)).to_sparse()
+            occurrences = (query.float() * self._corpus.float()).to_dense()
+            num = (occurrences * (self.k1 + 1))
+            den = (occurrences + (self.k1 * 
+                                    (1 - self.b + self.b * (self._corpus_lengths[:, None] / self._average_document_length))))
+            score = (num / den).sum(1)
+            scores.append(score)
         
-        return scores_n / scores_d
+        return torch.cat(scores, dim=0)
 
     def score_batch(self, queries: torch.Tensor, batch_size: Optional[int] = None) -> torch.Tensor:
         i = 0
@@ -125,7 +135,7 @@ class BM25(TokenizedBM25):
 
     def __init__(self, tokenizer: Optional[transformers.PreTrainedTokenizer] = None, k1: float = 1.5, b: float = 0.75, device: str = 'cpu') -> None:
         if tokenizer is None:
-            tokenizer = transformers.AutoTokenizer.from_pretrained('bert-base-uncased', use_fast=True)
+            tokenizer = transformers.AutoTokenizer.from_pretrained('bert-base-cased', use_fast=True)
         # TODO aggregate beyond subword level here...
         self.tokenizer = tokenizer
         tokenizer_fn = functools.partial(
