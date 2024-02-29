@@ -26,7 +26,7 @@ class TokenizedBM25:
     _corpus: Optional[torch.sparse.Tensor]
     _corpus_lengths: Optional[torch.Tensor]
     _average_document_length: Optional[float]
-    def __init__(self, k1: float = 1.5, b: float = 0.75, vocab_size: int = 100_000):
+    def __init__(self, k1: float = 1.5, b: float = 0.75, vocab_size: int = 100_000, device: str = 'cpu'):
         self.k1 = k1
         self.b = b
         self.vocab_size = vocab_size
@@ -37,13 +37,14 @@ class TokenizedBM25:
         self._corpus = None
         self._corpus_lengths = None
         self._average_document_length = None
+        self.device = device
 
     @property
     def _corpus_size(self) -> int:
         return len(self._corpus) if (self._corpus is not None) else -1
 
     def docs_to_bags(self, documents: torch.Tensor) -> torch.sparse.Tensor:
-        return documents_to_bags(documents, vocab_size=self.vocab_size)
+        return documents_to_bags(documents, vocab_size=self.vocab_size).to(self.device)
 
     def index(self, documents: torch.Tensor) -> None:
         self._documents = documents
@@ -51,9 +52,9 @@ class TokenizedBM25:
         self._average_document_length = self._corpus_lengths.mean()
         self._corpus = self.docs_to_bags(documents=documents)
         self._word_counts = self._corpus.sum(dim=0).to_dense()
-        self._documents_containing_word = torch.zeros(self.vocab_size, dtype=torch.long)
+        self._documents_containing_word = torch.zeros(self.vocab_size, dtype=torch.long, device=self.device)
         token_ids, token_counts = self._corpus.coalesce().indices()[1].unique(return_counts=True)
-        self._documents_containing_word = self._documents_containing_word.scatter_add(0, token_ids, token_counts)
+        self._documents_containing_word = self._documents_containing_word.scatter_add(0, token_ids, token_counts).to(self.device)
         
         idf_num = (self._corpus_size - self._documents_containing_word + 0.5)
         idf_den = (self._documents_containing_word + 0.5)
