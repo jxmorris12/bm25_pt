@@ -87,7 +87,7 @@ def test_scores_equal():
     torch.testing.assert_close(doc_scores, doc_scores_slow)
 
 
-def test_scores_equal_2():
+def test_scores_equal_batch():
     bm25 = BM25()
     corpus = [
         "A high weight in tf–idf is reached by a high term frequency",
@@ -100,15 +100,17 @@ def test_scores_equal_2():
     ]
     bm25.index(corpus)
 
-    queries = ["weights", "ratio logarithm"]
+    queries = ["weights", "ratio logarithm", "term filter common"]
 
     doc_scores_slow = bm25.score_batch(queries)
     doc_scores = bm25.score_batch(queries)
+    doc_scores_unbatched = bm25.score_batch(queries, batch_size=1)
 
     assert doc_scores[0].argmax() == 2
     assert doc_scores[1].argmax() == 5
     
     torch.testing.assert_close(doc_scores, doc_scores_slow)
+    torch.testing.assert_close(doc_scores, doc_scores_unbatched)
 
     # check term counts
     count_of_the =  " ".join(corpus + [""]).count("the ")

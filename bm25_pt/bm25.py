@@ -84,7 +84,7 @@ class TokenizedBM25:
     def score(self, query: torch.Tensor) -> torch.Tensor:
         return self.score_batch(query[None]).flatten()
 
-    def score_batch(self, queries: torch.Tensor) -> torch.Tensor:
+    def _score_batch(self, queries: torch.Tensor) -> torch.Tensor:
         # TODO: Batch idf computation, this shouldn't be too slow though since it's cached.
         num_queries, seq_length = queries.shape
         query_idxs = torch.arange(num_queries)[:, None].expand(-1, seq_length)
@@ -103,6 +103,14 @@ class TokenizedBM25:
         
         return scores_n / scores_d
 
+    def score_batch(self, queries: torch.Tensor, batch_size: Optional[int] = None) -> torch.Tensor:
+        i = 0
+        scores = []
+        batch_size = len(queries) if batch_size is None else batch_size
+        while i < len(queries):
+            scores.append(self._score_batch(queries[i:i+batch_size]))
+            i += batch_size
+        return torch.cat(scores, dim=0)
 
 class BM25(TokenizedBM25):
     k1: float
@@ -135,9 +143,9 @@ class BM25(TokenizedBM25):
     def score(self, query: str) -> torch.Tensor:
         return self.score_batch(queries=[query]).flatten()
 
-    def score_batch(self, queries: List[str]) -> torch.Tensor:
+    def score_batch(self, queries: List[str], batch_size: Optional[int] = None) -> torch.Tensor:
         queries_ids = self.tokenizer_fn(queries)
-        return super().score_batch(queries=queries_ids)
+        return super().score_batch(queries=queries_ids, batch_size=batch_size)
 
     def text_to_bags(self, documents: torch.Tensor) -> torch.sparse.Tensor:
         document_ids = self.tokenizer_fn(documents)
