@@ -2,6 +2,7 @@ from typing import Iterable, List, Optional
 
 import functools
 import math
+import scipy
 import torch
 import transformers
 import tqdm
@@ -15,6 +16,23 @@ def documents_to_bags(docs: torch.Tensor, vocab_size: int) -> torch.sparse.Tenso
     idxs = idxs.reshape((2, -1))
     vals = (docs > 0).int().flatten()
     return torch.sparse_coo_tensor(idxs, vals, size=(num_docs, vocab_size)).coalesce()
+
+
+def torch_sparse_to_scipy(t: torch.sparse.Tensor):
+    indices = t.coalesce().indices()
+    values = t.coalesce().values()
+    size = t.size()
+    coo_matrix = scipy.sparse.coo_matrix((values.numpy(), (indices[0].numpy(), indices[1].numpy())), shape=size)
+    return coo_matrix.tocsr()
+
+
+def sparse_divide(A: torch.sparse.Tensor, B: torch.sparse.Tensor) -> torch.sparse.Tensor:
+    """Have to do sparse division on CPU in scipy."""
+    device = A.device
+    A = torch_sparse_to_scipy(A)
+    B = torch_sparse_to_scipy(B)
+    r = (A / B)
+    return torch.sparse_coo_tensor(r.nonzero(), r.data, r.shape, device=device)
 
 
 class TokenizedBM25:
@@ -49,7 +67,7 @@ class TokenizedBM25:
         i = 0
         bags = []
         while i < len(documents):
-            bags.append(documents_to_bags(documents[i:i+bag_size]))
+            bags.append(self.docs_to_bags(documents[i:i+bag_size]))
             i += bag_size
         corpus = torch.cat(bags, dim=0)
         self._index_corpus(corpus)
@@ -96,28 +114,16 @@ class TokenizedBM25:
     def _score_batch(self, queries: torch.Tensor) -> torch.Tensor:
         # TODO: Batch idf computation, this shouldn't be too slow though since it's cached.
         num_queries, seq_length = queries.shape
-        query_idxs = torch.arange(num_queries)[:, None].expand(-1, seq_length)
-        idxs = torch.stack((
-            query_idxs, queries
-        ))
-        idxs = idxs.reshape((2, -1))
-        idf_vals = [[self._IDF[w] for w in q] for q in queries.tolist()]
-        idf_vals = torch.tensor(idf_vals, dtype=torch.float).flatten()
-        queries_idf = torch.sparse_coo_tensor(idxs, idf_vals, size=(num_queries, self.vocab_size)).coalesce().to(self.device)
+        queries_bag = self.docs_to_bags(queries)
 
-        # TODO: Batch efficiently with 3D tensors...
-        # PyTorch sparse doesn't support expand() so this is hard right now.
-        scores = []
-        for i in range(len(queries)):
-            query = queries_idf[i].to_dense().repeat((len(self._corpus), 1)).to_sparse()
-            occurrences = (query.float() * self._corpus.float()).to_dense()
-            num = (occurrences * (self.k1 + 1))
-            den = (occurrences + (self.k1 * 
-                                    (1 - self.b + self.b * (self._corpus_lengths[:, None] / self._average_document_length))))
-            score = (num / den).sum(1)
-            scores.append(score)
+        num = (self._corpus * (self.k1 + 1))
+        normalized_lengths = (self.k1 * (1 - self.b + self.b * (self._corpus_lengths[:, None] / self._average_document_length)))
+        den = normalized_lengths.repeat((1, self._corpus.shape[1])) + self._corpus
+        score = (self._IDF[None, :] * sparse_divide(num, den)).sum()
+
+        bm25_scores = queries_bag @ scores.T
         
-        return torch.cat(scores, dim=0)
+        return bm25_scores
 
     def score_batch(self, queries: torch.Tensor, batch_size: Optional[int] = None) -> torch.Tensor:
         i = 0
@@ -179,4 +185,4 @@ class BM25(TokenizedBM25):
 
     def text_to_bags(self, documents: torch.Tensor) -> torch.sparse.Tensor:
         document_ids = self.tokenizer_fn(documents)
-        return documents_to_bags(document_ids, vocab_size=self.vocab_size)
+        return self.docs_to_bags(document_ids)
