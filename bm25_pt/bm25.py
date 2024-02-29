@@ -2,7 +2,6 @@ from typing import Iterable, List, Optional
 
 import functools
 import math
-import scipy
 import torch
 import transformers
 import tqdm
@@ -16,23 +15,6 @@ def documents_to_bags(docs: torch.Tensor, vocab_size: int) -> torch.sparse.Tenso
     idxs = idxs.reshape((2, -1))
     vals = (docs > 0).int().flatten()
     return torch.sparse_coo_tensor(idxs, vals, size=(num_docs, vocab_size)).coalesce()
-
-
-def torch_sparse_to_scipy(t: torch.sparse.Tensor):
-    indices = t.coalesce().indices()
-    values = t.coalesce().values()
-    size = t.size()
-    coo_matrix = scipy.sparse.coo_matrix((values.numpy(), (indices[0].numpy(), indices[1].numpy())), shape=size)
-    return coo_matrix.tocsr()
-
-
-def sparse_divide(A: torch.sparse.Tensor, B: torch.sparse.Tensor) -> torch.sparse.Tensor:
-    """Have to do sparse division on CPU in scipy."""
-    device = A.device
-    A = torch_sparse_to_scipy(A)
-    B = torch_sparse_to_scipy(B)
-    r = (A / B)
-    return torch.sparse_coo_tensor(r.nonzero(), r.data, r.shape, device=device)
 
 
 class TokenizedBM25:
@@ -99,9 +81,7 @@ class TokenizedBM25:
             den = occurrences + (self.k1 * 
                                     (1 - self.b + self.b * (this_document_length / self._average_document_length)))
             word_score = self.compute_IDF(word) * num / den
-            print("word:", word, "num:", num, "den:", den, "idf:", self.compute_IDF(word))
             score += word_score
-            print("\t total:", score)
         return score
 
     def score_slow(self, query: torch.Tensor) -> torch.Tensor:
@@ -112,16 +92,16 @@ class TokenizedBM25:
         return self.score_batch(query[None]).flatten()
 
     def _score_batch(self, queries: torch.Tensor) -> torch.Tensor:
-        # TODO: Batch idf computation, this shouldn't be too slow though since it's cached.
+        # TODO: Change all dense computations to sparse
         num_queries, seq_length = queries.shape
         queries_bag = self.docs_to_bags(queries)
 
         num = (self._corpus * (self.k1 + 1))
         normalized_lengths = (self.k1 * (1 - self.b + self.b * (self._corpus_lengths[:, None] / self._average_document_length)))
         den = normalized_lengths.repeat((1, self._corpus.shape[1])) + self._corpus
-        score = (self._IDF[None, :] * sparse_divide(num, den)).sum()
+        scores = (self._IDF[None, :] * (num.to_dense() / den))
 
-        bm25_scores = queries_bag @ scores.T
+        bm25_scores = queries_bag.float().to_dense() @ scores.T
         
         return bm25_scores
 

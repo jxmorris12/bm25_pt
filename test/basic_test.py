@@ -116,7 +116,7 @@ def test_scores_equal_batch():
     # check term counts
     count_of_the =  " ".join(corpus + [""]).count("the ")
     token_of_the = bm25.tokenizer.encode("the", add_special_tokens=False, return_tensors='pt').item()
-    assert count_of_the == bm25._corpus.sum(0)[1996]
+    assert count_of_the == bm25._corpus.sum(0)[token_of_the]
 
 
 def test_scores_equal_gpu():
