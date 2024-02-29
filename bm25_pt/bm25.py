@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 import functools
 import math
@@ -22,7 +22,6 @@ class TokenizedBM25:
     b: float
     vocab_size: int
     ########################################################
-    _documents: Optional[List[str]]
     _corpus: Optional[torch.sparse.Tensor]
     _corpus_lengths: Optional[torch.Tensor]
     _average_document_length: Optional[float]
@@ -33,7 +32,6 @@ class TokenizedBM25:
 
         self._documents_containing_word = None
         self._word_counts = None
-        self._documents = None
         self._corpus = None
         self._corpus_lengths = None
         self._average_document_length = None
@@ -45,17 +43,25 @@ class TokenizedBM25:
 
     def docs_to_bags(self, documents: torch.Tensor) -> torch.sparse.Tensor:
         return documents_to_bags(documents, vocab_size=self.vocab_size).to(self.device)
-
+    
     def index(self, documents: torch.Tensor) -> None:
-        self._documents = documents
-        self._corpus_lengths = (documents != 0).sum(1).float()
+        bag_size = 4096
+        i = 0
+        bags = []
+        while i < len(documents):
+            bags.append(documents_to_bag(documents[i:i+batch_size]))
+            i += bag_size
+        corpus = torch.cat(bags, dim=0)
+        self._index_corpus(corpus)
+
+    def _index_corpus(self, corpus: torch.Tensor) -> None:
+        self._corpus = corpus
+        self._corpus_lengths = self._corpus.sum(1).float().to_dense()
         self._average_document_length = self._corpus_lengths.mean()
-        self._corpus = self.docs_to_bags(documents=documents)
         self._word_counts = self._corpus.sum(dim=0).to_dense()
         self._documents_containing_word = torch.zeros(self.vocab_size, dtype=torch.long, device=self.device)
         token_ids, token_counts = self._corpus.coalesce().indices()[1].unique(return_counts=True)
         self._documents_containing_word = self._documents_containing_word.scatter_add(0, token_ids, token_counts).to(self.device)
-        
         idf_num = (self._corpus_size - self._documents_containing_word + 0.5)
         idf_den = (self._documents_containing_word + 0.5)
         self._IDF = (idf_num / idf_den + 1).log()
@@ -66,11 +72,11 @@ class TokenizedBM25:
         den = (self._documents_containing_word[word] + 0.5)
         return math.log(num / den + 1)
 
-    def _score_pair_slow(self, query: torch.Tensor, document: torch.Tensor) -> torch.Tensor:
-        this_document_length = (document != 0).int().sum()
+    def _score_pair_slow(self, query: torch.Tensor, document_bag: torch.sparse.Tensor) -> torch.Tensor:
+        this_document_length = document_bag.sum().item()
         score = 0
         for word in query:
-            occurrences = (document == word).int().sum()
+            occurrences = (document_bag[word]).int()
             num = occurrences * (self.k1 + 1)
             den = occurrences + (self.k1 * 
                                     (1 - self.b + self.b * (this_document_length / self._average_document_length)))
@@ -79,7 +85,7 @@ class TokenizedBM25:
         return score
 
     def score_slow(self, query: torch.Tensor) -> torch.Tensor:
-        scores = [self._score_pair_slow(query, document) for document in self._documents]
+        scores = [self._score_pair_slow(query, document_bag) for document_bag in self._corpus]
         return torch.Tensor(scores)
     
     def score(self, query: torch.Tensor) -> torch.Tensor:
@@ -96,7 +102,6 @@ class TokenizedBM25:
         idf_vals = [[self.compute_IDF(w) for w in q] for q in queries.tolist()]
         idf_vals = torch.tensor(idf_vals, dtype=torch.float).flatten()
         queries_idf = torch.sparse_coo_tensor(idxs, idf_vals, size=(num_queries, self.vocab_size)).coalesce()
-
         occurrences = (queries_idf.float() @ self._corpus.float().T).to_dense()
         scores_n = (occurrences * (self.k1 + 1))
         scores_d = (occurrences + (self.k1 * 
@@ -107,7 +112,7 @@ class TokenizedBM25:
     def score_batch(self, queries: torch.Tensor, batch_size: Optional[int] = None) -> torch.Tensor:
         i = 0
         scores = []
-        batch_size = len(queries) if batch_size is None else batch_size
+        batch_size = batch_size or len(queries)
         while i < len(queries):
             scores.append(self._score_batch(queries[i:i+batch_size]))
             i += batch_size
@@ -125,17 +130,23 @@ class BM25(TokenizedBM25):
         self.tokenizer = tokenizer
         tokenizer_fn = functools.partial(
             tokenizer,
-            return_tensors='pt',
             truncation=False,
             padding=True,
             add_special_tokens=False,
         )
-        self.tokenizer_fn = lambda s: tokenizer_fn(s).input_ids
+        self.tokenizer_fn = lambda s: tokenizer_fn(s, return_tensors='pt').input_ids
         super().__init__(k1=k1, b=b, vocab_size=tokenizer.vocab_size)
     
     def index(self, documents: List[str]) -> None:
-        documents_ids = self.tokenizer_fn(documents)
-        return super().index(documents=documents_ids)
+        bag_size = 4096
+        bags = []
+        i = 0
+        while i < len(documents):
+            bags.append(self.text_to_bags(documents[i:i+bag_size]))
+            i += bag_size
+        corpus = torch.cat(bags, dim=0)
+        self._documents = documents
+        return super()._index_corpus(corpus=corpus)
 
     def score_slow(self, query: str) -> torch.Tensor:
         query_ids = self.tokenizer_fn(query).flatten()
@@ -145,9 +156,15 @@ class BM25(TokenizedBM25):
         return self.score_batch(queries=[query]).flatten()
 
     def score_batch(self, queries: List[str], batch_size: Optional[int] = None) -> torch.Tensor:
-        queries_ids = self.tokenizer_fn(queries)
-        return super().score_batch(queries=queries_ids, batch_size=batch_size)
+        i = 0
+        scores = []
+        batch_size = batch_size or len(queries)
+        while i < len(queries):
+            queries_ids = self.tokenizer_fn(queries[i:i+batch_size]) 
+            scores.append(super().score_batch(queries=queries_ids, batch_size=batch_size))
+            i += batch_size
+        return torch.cat(scores, dim=0)
 
     def text_to_bags(self, documents: torch.Tensor) -> torch.sparse.Tensor:
         document_ids = self.tokenizer_fn(documents)
-        return self.documents_to_bags(document_ids, vocab_size=self.vocab_size)
+        return documents_to_bags(document_ids, vocab_size=self.vocab_size)
