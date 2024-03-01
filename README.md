@@ -53,9 +53,7 @@ To perform operations on a GPU, it's easy, just pass a device to initialization:
 from bm25_pt import BM25
 
 bm25 = BM25(device='cuda')
-```
-
-then proceed to use the library as normal.ss    
+```    
 
 
 ### Benchmarking on LoCO
