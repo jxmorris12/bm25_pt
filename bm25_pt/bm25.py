@@ -23,6 +23,7 @@ class TokenizedBM25:
     vocab_size: int
     ########################################################
     _corpus: Optional[torch.sparse.Tensor]
+    _corpus_scores: Optional[torch.sparse.Tensor]
     _corpus_lengths: Optional[torch.Tensor]
     _average_document_length: Optional[float]
     def __init__(self, k1: float = 1.5, b: float = 0.75, vocab_size: int = 100_000, device: str = 'cpu'):
@@ -34,6 +35,7 @@ class TokenizedBM25:
         self._word_counts = None
         self._corpus = None
         self._corpus_lengths = None
+        self._corpus_scores = None
         self._average_document_length = None
         self.device = device
 
@@ -65,6 +67,11 @@ class TokenizedBM25:
         idf_num = (self._corpus_size - self._documents_containing_word + 0.5)
         idf_den = (self._documents_containing_word + 0.5)
         self._IDF = (idf_num / idf_den + 1).log()
+        # We can precompute all BM25-weighted scores for every word in every document:
+        num = (self._corpus * (self.k1 + 1))
+        normalized_lengths = (self.k1 * (1 - self.b + self.b * (self._corpus_lengths[:, None] / self._average_document_length)))
+        den = normalized_lengths.repeat((1, self._corpus.shape[1])) + self._corpus
+        self._corpus_scores = ((self._IDF[None, :] * (num.to_dense() / den))).to_sparse()
 
     @functools.cache
     def compute_IDF(self, word: int) -> float:
@@ -92,16 +99,8 @@ class TokenizedBM25:
         return self.score_batch(query[None]).flatten()
 
     def _score_batch(self, queries: torch.Tensor) -> torch.Tensor:
-        # TODO: Change all dense computations to sparse
-        num_queries, seq_length = queries.shape
         queries_bag = self.docs_to_bags(queries)
-
-        num = (self._corpus * (self.k1 + 1))
-        normalized_lengths = (self.k1 * (1 - self.b + self.b * (self._corpus_lengths[:, None] / self._average_document_length)))
-        den = normalized_lengths.repeat((1, self._corpus.shape[1])) + self._corpus
-        scores = (self._IDF[None, :] * (num.to_dense() / den))
-
-        bm25_scores = queries_bag.float().to_dense() @ scores.T
+        bm25_scores = queries_bag.float().to_dense() @ self._corpus_scores.T
         
         return bm25_scores
 
