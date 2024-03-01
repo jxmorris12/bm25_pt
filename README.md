@@ -31,8 +31,13 @@ print(doc_scores)
         [0.0000, 0.0000, 0.0000, 1.5317, 0.0000, 2.0203, 0.0000]])
 ```
 
-can also call `score()` with a
+can also call `score()` with a single example:
 
+```python
+doc_scores = bm25.score(queries[0])
+print(doc_scores)
+>> tensor([0.0000, 0.0000, 1.4238, 0.0000, 0.0000, 0.0000, 0.0000])
+```
 ### Use your own tokenizer
 
 You can use your own tokenizer if you want. Simply provide your tokenizer to the `BM25` constructor:
