@@ -21,7 +21,7 @@ def documents_to_bags(docs: torch.Tensor, vocab_size: int) -> torch.sparse.Tenso
 
 def scipy_sparse_to_torch(csr: scipy.sparse.csr_matrix) -> torch.sparse.Tensor:
     if not hasattr(csr, 'indptr'): 
-        raise ValueError(f"invalid type {type(str)}")
+        raise ValueError(f"invalid type {type(csr)}")
     idx_ptr = torch.LongTensor(csr.indptr)
     idxs = torch.LongTensor(csr.indices)
     vals = torch.FloatTensor(csr.data)
@@ -44,6 +44,19 @@ def sparse_vector_mat_product(x: torch.Tensor, M: torch.sparse.Tensor) -> torch.
     prod = xs.multiply(Ms)
     assert prod.shape == Ms.shape
     return scipy_sparse_to_torch(prod).to_sparse_coo().to(x.device)
+
+
+def sparse_vector_mat_nonzero_inconsistent_addition(x: torch.Tensor, M: torch.sparse.Tensor) -> torch.sparse.Tensor:
+    # unfortunately have to do this in scipy to avoid materializing the full expansion of x
+    xs = scipy.sparse.csr_matrix(x.cpu().numpy())
+    Ms = torch_sparse_to_scipy(M)
+    Ms.eliminate_zeros()
+    # Twist to keep it sparse: ONLY ADD TO ROWS OF M THAT ARE NONZERO. (hence the 'inconsistent' name.)
+    row, _col = Ms.nonzero()
+    vals_to_add = x[row].cpu().numpy().squeeze()
+    Ms.data = Ms.data + vals_to_add
+    assert M.shape == Ms.shape
+    return scipy_sparse_to_torch(Ms).to(x.device)
 
 
 def sparse_mat_division(A: torch.sparse.Tensor, B: torch.sparse.Tensor) -> torch.sparse.Tensor:
@@ -96,7 +109,6 @@ class TokenizedBM25:
         while i < len(documents):
             bags.append(self.docs_to_bags(documents[i:i+bag_size]))
             i += bag_size
-        print("catting:")
         corpus = torch.cat(bags, dim=0)
         self._index_corpus(corpus)
 
@@ -114,13 +126,10 @@ class TokenizedBM25:
         self._IDF = (idf_num / idf_den + 1).log()
         # We can precompute all BM25-weighted scores for every word in every document:
         num = (self._corpus * (self.k1 + 1))
-        print("num:", num)
         normalized_lengths = (self.k1 * (1 - self.b + self.b * (self._corpus_lengths[:, None] / self._average_document_length)))
-        print("length:", normalized_lengths)
-        den = sparse_vector_mat_product(normalized_lengths, self._corpus)
-        print("den:", den)
-        self._corpus_scores = sparse_vector_mat_product(self._IDF, sparse_mat_division(num, den))
-        print("scores:", self._corpus_scores)
+        den = sparse_vector_mat_nonzero_inconsistent_addition(normalized_lengths, self._corpus)
+        scores = sparse_mat_division(num, den)
+        self._corpus_scores = sparse_vector_mat_product(self._IDF, scores)
 
     @functools.cache
     def compute_IDF(self, word: int) -> float:

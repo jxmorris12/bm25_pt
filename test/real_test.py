@@ -21,13 +21,15 @@ def scrolls_queries() -> List[str]:
     return pickle.load(open(file_path, "rb"))
 
 def test_scrolls(scrolls_corpus, scrolls_queries):
-    scrolls_corpus = scrolls_corpus[:1]
+    scrolls_corpus = scrolls_corpus[:3]
     bm25 = BM25()
     print("indexing")
     bm25.index(scrolls_corpus)
+    nc = 4
     print("scoring (slow)")
-    doc_scores_slow = bm25.score_slow(scrolls_queries[0])
+    slow_scores_list = [bm25.score_slow(scrolls_queries[i]) for i in range(nc)]
+    doc_scores_slow = torch.stack(slow_scores_list)
     print("scoring (fast)")
-    doc_scores = bm25.score(scrolls_queries[0])
+    doc_scores = bm25.score_batch(scrolls_queries[:nc])
 
     torch.testing.assert_close(doc_scores, doc_scores_slow)
