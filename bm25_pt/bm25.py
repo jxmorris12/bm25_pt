@@ -1,7 +1,9 @@
-from typing import Iterable, List, Optional
+from typing import List, Optional
 
 import functools
 import math
+import numpy as np
+import scipy
 import torch
 import transformers
 import tqdm
@@ -15,6 +17,47 @@ def documents_to_bags(docs: torch.Tensor, vocab_size: int) -> torch.sparse.Tenso
     idxs = idxs.reshape((2, -1))
     vals = (docs > 0).int().flatten()
     return torch.sparse_coo_tensor(idxs, vals, size=(num_docs, vocab_size)).coalesce()
+
+
+def scipy_sparse_to_torch(csr: scipy.sparse.csr_matrix) -> torch.sparse.Tensor:
+    if not hasattr(csr, 'indptr'): 
+        raise ValueError(f"invalid type {type(str)}")
+    idx_ptr = torch.LongTensor(csr.indptr)
+    idxs = torch.LongTensor(csr.indices)
+    vals = torch.FloatTensor(csr.data)
+    return torch.sparse_csr_tensor(idx_ptr, idxs, vals, size=csr.shape)
+
+
+def torch_sparse_to_scipy(t: torch.sparse.Tensor) -> scipy.sparse.csr_matrix:
+    t = t.cpu().to_sparse_coo()
+    indices = t.coalesce().indices()
+    values = t.coalesce().values()
+    size = t.size()
+    coo_matrix = scipy.sparse.coo_matrix((values.numpy(), (indices[0].numpy(), indices[1].numpy())), shape=size)
+    return coo_matrix.tocsr()
+
+
+def sparse_vector_mat_product(x: torch.Tensor, M: torch.sparse.Tensor) -> torch.sparse.Tensor:
+    # unfortunately have to do this in scipy to avoid materializing the full expansion of x
+    xs = scipy.sparse.csr_matrix(x.cpu().numpy())
+    Ms = torch_sparse_to_scipy(M)
+    prod = xs.multiply(Ms)
+    assert prod.shape == Ms.shape
+    return scipy_sparse_to_torch(prod).to(x.device)
+
+
+def sparse_mat_division(A: torch.Tensor, B: torch.sparse.Tensor) -> torch.sparse.Tensor:
+    # unfortunately have to do this in scipy to avoid materializing the full expansions of A and B
+    As = torch_sparse_to_scipy(A)
+    Bs = torch_sparse_to_scipy(B)
+    # Can't divide sparse matrix. First, take reciprocal here.
+    idx_ptr = (Bs.indptr)
+    idxs = (Bs.indices)
+    vals = np.reciprocal(Bs.data)
+    Bsr = scipy.sparse.csr_matrix((vals, idxs, idx_ptr), shape=Bs.shape)
+    # Now just multiply.
+    val = As.multiply(Bsr)
+    return scipy_sparse_to_torch(val).to(A.device).to_sparse_coo()
 
 
 class TokenizedBM25:
@@ -47,15 +90,17 @@ class TokenizedBM25:
         return documents_to_bags(documents, vocab_size=self.vocab_size).to(self.device)
     
     def index(self, documents: torch.Tensor) -> None:
-        bag_size = 4096
+        bag_size = 2 ** 10 # just choosing a size to avoid oom
         i = 0
         bags = []
         while i < len(documents):
             bags.append(self.docs_to_bags(documents[i:i+bag_size]))
             i += bag_size
+        print("catting:")
         corpus = torch.cat(bags, dim=0)
         self._index_corpus(corpus)
 
+    @torch.no_grad
     def _index_corpus(self, corpus: torch.Tensor) -> None:
         self._corpus = corpus.to(self.device)
         self._corpus_lengths = self._corpus.sum(1).float().to_dense()
@@ -70,8 +115,8 @@ class TokenizedBM25:
         # We can precompute all BM25-weighted scores for every word in every document:
         num = (self._corpus * (self.k1 + 1))
         normalized_lengths = (self.k1 * (1 - self.b + self.b * (self._corpus_lengths[:, None] / self._average_document_length)))
-        den = normalized_lengths.repeat((1, self._corpus.shape[1])) + self._corpus
-        self._corpus_scores = ((self._IDF[None, :] * (num.to_dense() / den))).to_sparse()
+        den = sparse_vector_mat_product(normalized_lengths, self._corpus)
+        self._corpus_scores = sparse_vector_mat_product(self._IDF, sparse_mat_division(num, den))
 
     @functools.cache
     def compute_IDF(self, word: int) -> float:
@@ -98,11 +143,11 @@ class TokenizedBM25:
     def score(self, query: torch.Tensor) -> torch.Tensor:
         return self.score_batch(query[None]).flatten()
 
+    @torch.no_grad
     def _score_batch(self, queries: torch.Tensor) -> torch.Tensor:
         queries_bag = self.docs_to_bags(queries)
-        bm25_scores = queries_bag.float().to_dense() @ self._corpus_scores.T
-        
-        return bm25_scores
+        scores = queries_bag.float() @ self._corpus_scores.to_sparse_coo().T
+        return scores.to_dense()
 
     def score_batch(self, queries: torch.Tensor, batch_size: Optional[int] = None) -> torch.Tensor:
         i = 0
