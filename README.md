@@ -73,6 +73,7 @@ I benchmarked this library on the [Stanford LoCo benchmark](https://hazyresearch
 As you can see below, this library is very fast, even on CPU:
 
 | Dataset | Size | Index time (s) | Scoring time (s) |
+|---------------------|----------|---------------------|--------------------|
 | Tau Scrolls – Summ. | 3673 | 43.2 | 14.5 |
 | Tau Scrolls – Gov. | 17,457 | 622.7 | 328.2 |
 | Tau Scrolls QMSUM | 272 | 5.5 | 0.2 |
