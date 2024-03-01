@@ -1,6 +1,6 @@
 # bm25-pt
 
-A minimal BM25 implementation using PyTorch. (Also uses [HuggingFace tokenizers](https://huggingface.co/docs/tokenizers/en/index) behind the scenes to tokenize text.)
+A minimal implementation of [Okapi BM25](https://en.wikipedia.org/wiki/Okapi) using PyTorch. (Also uses [HuggingFace tokenizers](https://huggingface.co/docs/tokenizers/en/index) behind the scenes to tokenize text.)
 
 ```bash
 pip install bm25_pt
