@@ -121,7 +121,7 @@ class BM25(TokenizedBM25):
 
     def __init__(self, tokenizer: Optional[transformers.PreTrainedTokenizer] = None, k1: float = 1.5, b: float = 0.75, device: str = 'cpu') -> None:
         if tokenizer is None:
-            tokenizer = transformers.AutoTokenizer.from_pretrained('bert-base-cased', use_fast=True)
+            tokenizer = transformers.AutoTokenizer.from_pretrained('bert-base-uncased', use_fast=True)
         # TODO aggregate beyond subword level here...
         self.tokenizer = tokenizer
         tokenizer_fn = functools.partial(
