@@ -56,3 +56,27 @@ bm25 = BM25(device='cuda')
 ```
 
 then proceed to use the library as normal.ss    
+
+
+### Benchmarking on LoCO
+
+I benchmarked this library on the [Stanford LoCo benchmark](https://hazyresearch.stanford.edu/blog/2024-01-11-m2-bert-retrieval). I'm not using any special tokenizer, so it's just using `bert-base-uncased` and matching based on subword tokens. We could probably get better performance by using a word-based model, perhaps by using a cased model, and certainly by tuning hyperparameters, especially `b` and `k1`.
+
+| Retrieval Encoders  | Seq Len  | Tau Scrolls – Summ. | Tau Scrolls – Gov. | Tau Scrolls QMSUM | QASPER - Title | QASPER - Abstract | Average |
+|---------------------|----------|---------------------|--------------------|-------------------|----------------|-------------------|---------|
+|    bm25_pt   | infinity |         89.5        |        96.1        |        56.2       |      94.3      |        99.4       |   87.1  |
+|  M2-BERT-2048 (80M) |   2048   |         81.8        |        94.7        |        58.5       |      87.3      |        95.5       |   83.6  |
+|  M2-BERT-8192 (80M) |   8192   |         94.7        |        96.5        |        64.1       |      86.8      |        97.5       |   85.9  |
+| M2-BERT-32768 (80M) |   32768  |         98.6        |        98.5        |        69.5       |      97.4      |        98.7       |   92.5  |
+
+
+As you can see below, this library is very fast, even on CPU:
+
+| Dataset | Size | Index time (s) | Scoring time (s) |
+| Tau Scrolls – Summ. | 3673 | 43.2 | 14.5 |
+| Tau Scrolls – Gov. | 17,457 | 622.7 | 328.2 |
+| Tau Scrolls QMSUM | 272 | 5.5 | 0.2 |
+| QASPER - Title | 416 | 6.1 | 0.2 |
+| QASPER - Abstract | 416 | 5.9 | 0.2
+
+I think that most of the time is spent tokenizing long documents. It could likely be sped up with a faster tokenizer and/or multiprocessing.
