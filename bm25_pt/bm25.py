@@ -43,10 +43,10 @@ def sparse_vector_mat_product(x: torch.Tensor, M: torch.sparse.Tensor) -> torch.
     Ms = torch_sparse_to_scipy(M)
     prod = xs.multiply(Ms)
     assert prod.shape == Ms.shape
-    return scipy_sparse_to_torch(prod).to(x.device)
+    return scipy_sparse_to_torch(prod).to_sparse_coo().to(x.device)
 
 
-def sparse_mat_division(A: torch.Tensor, B: torch.sparse.Tensor) -> torch.sparse.Tensor:
+def sparse_mat_division(A: torch.sparse.Tensor, B: torch.sparse.Tensor) -> torch.sparse.Tensor:
     # unfortunately have to do this in scipy to avoid materializing the full expansions of A and B
     As = torch_sparse_to_scipy(A)
     Bs = torch_sparse_to_scipy(B)
@@ -114,9 +114,13 @@ class TokenizedBM25:
         self._IDF = (idf_num / idf_den + 1).log()
         # We can precompute all BM25-weighted scores for every word in every document:
         num = (self._corpus * (self.k1 + 1))
+        print("num:", num)
         normalized_lengths = (self.k1 * (1 - self.b + self.b * (self._corpus_lengths[:, None] / self._average_document_length)))
+        print("length:", normalized_lengths)
         den = sparse_vector_mat_product(normalized_lengths, self._corpus)
+        print("den:", den)
         self._corpus_scores = sparse_vector_mat_product(self._IDF, sparse_mat_division(num, den))
+        print("scores:", self._corpus_scores)
 
     @functools.cache
     def compute_IDF(self, word: int) -> float:
@@ -146,7 +150,7 @@ class TokenizedBM25:
     @torch.no_grad
     def _score_batch(self, queries: torch.Tensor) -> torch.Tensor:
         queries_bag = self.docs_to_bags(queries)
-        scores = queries_bag.float() @ self._corpus_scores.to_sparse_coo().T
+        scores = queries_bag.float() @ self._corpus_scores.T
         return scores.to_dense()
 
     def score_batch(self, queries: torch.Tensor, batch_size: Optional[int] = None) -> torch.Tensor:
