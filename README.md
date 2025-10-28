@@ -84,3 +84,15 @@ As you can see below, this library is very fast, even on CPU:
 | QASPER - Abstract | 416 | 5.9 | 0.2
 
 I think that most of the time is spent tokenizing long documents. It could likely be sped up with a faster tokenizer and/or multiprocessing.
+
+
+### Citation
+
+```
+@misc{morris2024bm25pt,
+  author = {Morris, John X},
+  title = {bm25-pt: A minimal implementation of Okapi BM25 using PyTorch},
+  url = {https://github.com/jxmorris12/bm25-pt},
+  year = {2024}
+}
+```
